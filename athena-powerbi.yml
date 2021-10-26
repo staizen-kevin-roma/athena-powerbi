@@ -284,7 +284,7 @@ Resources:
           <powershell>
             cd C:\Users\Administrator\Desktop
             # New-Item -Path "C:\Windows\ServiceProfiles\PBIEgwService\Documents\Power BI Desktop\Custom Connectors" -ItemType "directory"
-            $content = 'Add-OdbcDsn -DriverName "Simba Athena ODBC Driver" -DsnType "System" -Platform "64-bit" -Name "awsbilling" -SetPropertyValue @("Description=awsbilling" , "AWSRegion=${AWS::Region}" , "Workgroup=athena-powerbi-staizen-aws" , "S3OutputLocation=s3://aws-athena-pbi-query-results-${AWS::AccountId}-${AWS::Region}", "S3OutputEncOption=SSE_S3", "AuthenticationType=Instance Profile")' | out-file -filepath C:\Users\Administrator\Desktop\ConfigureODBC.ps1
+            $content = 'Add-OdbcDsn -DriverName "Simba Athena ODBC Driver" -DsnType "System" -Platform "64-bit" -Name "awsbillingconnection" -SetPropertyValue @("Description=awsbillingconnection" , "AWSRegion=${AWS::Region}" , "Workgroup=athena-powerbi-staizen-aws" , "S3OutputLocation=s3://aws-athena-pbi-query-results-${AWS::AccountId}-${AWS::Region}", "S3OutputEncOption=SSE_S3", "AuthenticationType=Instance Profile")' | out-file -filepath C:\Users\Administrator\Desktop\ConfigureODBC.ps1
             # Disable IE Enhanced Security Configuration
             $AdminKey = HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\{A509B1A7-37EF-4b3f-8CFC-4F3A74704073}
             Set-ItemProperty -Path $AdminKey -Name IsInstalled -Value 0
@@ -311,7 +311,7 @@ Resources:
           <powershell>
             cd C:\Users\Administrator\Desktop
             New-Item -Path "C:\Users\Administrator\Documents\Power BI Desktop\Custom Connectors" -ItemType "directory"
-            $content = 'Add-OdbcDsn -DriverName "Simba Athena ODBC Driver" -DsnType "System" -Platform "64-bit" -Name "awsbilling" -SetPropertyValue @("Description=awsbilling" , "AWSRegion=${AWS::Region}" , "Workgroup=athena-powerbi-staizen-aws" , "S3OutputLocation=s3://aws-athena-pbi-query-results-${AWS::AccountId}-${AWS::Region}", "S3OutputEncOption=SSE_S3", "AuthenticationType=Instance Profile")' | out-file -filepath C:\Users\Administrator\Desktop\ConfigureODBC.ps1
+            $content = 'Add-OdbcDsn -DriverName "Simba Athena ODBC Driver" -DsnType "System" -Platform "64-bit" -Name "awsbillingconnection" -SetPropertyValue @("Description=awsbillingconnection" , "AWSRegion=${AWS::Region}" , "Workgroup=athena-powerbi-staizen-aws" , "S3OutputLocation=s3://aws-athena-pbi-query-results-${AWS::AccountId}-${AWS::Region}", "S3OutputEncOption=SSE_S3", "AuthenticationType=Instance Profile")' | out-file -filepath C:\Users\Administrator\Desktop\ConfigureODBC.ps1
             # Disable IE Enhanced Security Configuration
             $AdminKey = HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\{A509B1A7-37EF-4b3f-8CFC-4F3A74704073}
             Set-ItemProperty -Path $AdminKey -Name IsInstalled -Value 0

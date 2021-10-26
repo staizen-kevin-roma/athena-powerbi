@@ -1,0 +1,539 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: This cloudformation stack shows how to integrate Amazon Athena with Microsoft Power BI
+
+Parameters:
+  KeyName:
+    Description: The name of an existing keypair in your account.
+    Type: AWS::EC2::KeyPair::KeyName
+    "Default": "sandbox-test"
+
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-windows-latest/Windows_Server-2019-English-Full-Base'
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 172.31.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: staizen-aws
+          Value: athena-powerbi
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: staizen-aws
+          Value: athena-powerbi
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: staizen-aws
+          Value: athena-powerbi
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone:
+        !Select
+          - 0
+          - Fn::GetAZs: !Ref AWS::Region
+      CidrBlock: 172.31.16.0/20
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: staizen-aws
+          Value: athena-powerbi
+
+  PublicSubnetAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone:
+        !Select
+          - 0
+          - Fn::GetAZs: !Ref AWS::Region
+      CidrBlock: 172.31.32.0/20
+      Tags:
+        - Key: staizen-aws
+          Value: athena-powerbi
+
+  ElasticIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt ElasticIp.AllocationId
+      SubnetId: !Ref PublicSubnet
+      Tags:
+        - Key: staizen-aws
+          Value: athena-powerbi
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: staizen-aws
+          Value: athena-powerbi
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 172.31.32.0/20
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnetAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet
+
+  AthenaEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PrivateDnsEnabled: true
+      SecurityGroupIds:
+        - !Ref MainSecurityGroup
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.athena
+      SubnetIds:
+        - !Ref PrivateSubnet
+      VpcEndpointType: Interface
+      VpcId: !Ref VPC
+
+  S3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+        - !Ref PublicRouteTable
+      VpcEndpointType: Gateway
+      VpcId: !Ref VPC
+  
+  AthenaOutputS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: Private
+      BucketName: !Sub 'aws-athena-pbi-query-results-${AWS::AccountId}-${AWS::Region}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+    DeletionPolicy: Retain
+
+  PowerBiGatewayRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "athena.amazonaws.com"
+                - "ec2.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - !Ref SSMPowerBIAthena
+        - !Ref AthenaPowerBIAthena
+        - !Ref S3AWSBillingBIAthena
+        - !Ref S3QueryResultPowerBIAthena
+        - !Ref GluePowerBIAthena
+  
+  AthenaPowerBIAthena:
+    Type: AWS::IAM::ManagedPolicy
+    Properties: 
+      Description: Provides access to perform Amazon Athena operations on the Amazon Athena Power BI
+      PolicyDocument: 
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action:
+              - "athena:GetWorkGroup"
+              - "athena:StartQueryExecution"
+              - "athena:StopQueryExecution"
+              - "athena:GetQueryExecution"
+              - "athena:GetQueryResults"
+              - "athena:GetQueryResultsStream"
+            Resource: 
+              - !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/athena-powerbi-staizen-aws"
+              - !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:datacatalog/awsbilling"
+  
+  S3AWSBillingBIAthena:
+    Type: AWS::IAM::ManagedPolicy
+    Properties: 
+      Description: Provides access to perform S3 operations on the input of the Amazon Athena Power BI
+      PolicyDocument: 
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action:
+              - "s3:GetObjectAcl"
+              - "s3:GetObject"
+              - "s3:ListBucket"
+            Resource: 
+              - "arn:aws:s3:::staizen-powerbi-reports"
+              - "arn:aws:s3:::staizen-powerbi-reports/example-report-name/example-report-name/year=2021/*"
+  
+  S3QueryResultPowerBIAthena:
+    Type: AWS::IAM::ManagedPolicy
+    Properties: 
+      Description: Provides access to perform S3 operations on the output of the Amazon Athena Power BI
+      PolicyDocument: 
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action:
+              - "s3:GetBucketLocation"
+              - "s3:GetObject"
+              - "s3:ListBucket"
+              - "s3:ListBucketMultipartUploads"
+              - "s3:ListMultipartUploadParts"
+              - "s3:AbortMultipartUpload"
+              - "s3:PutObject"
+            Resource: 
+                - "arn:aws:s3:::aws-athena-pbi-query-results-*"
+
+  GluePowerBIAthena:
+    Type: AWS::IAM::ManagedPolicy
+    Properties: 
+      Description: Provides access to perform AWS Glue operations on the output of the Amazon Athena Power BI
+      PolicyDocument: 
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action:
+              - "glue:GetCatalogImportStatus"
+              - "glue:GetPartition"
+              - "glue:GetTables"
+              - "glue:GetPartitions"
+              - "glue:GetDatabases"
+              - "glue:GetDatabase"
+              - "glue:GetTable"
+            Resource: 
+              - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/awsbilling"
+              - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/awsbilling/records"
+              - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog"
+
+  SSMPowerBIAthena:
+    Type: AWS::IAM::ManagedPolicy
+    Properties: 
+      Description: Provides access to perform SSM operations on the Amazon Athena Power BI
+      PolicyDocument: 
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action:
+              - "ssm:UpdateInstanceInformation"
+              - "ssmmessages:CreateControlChannel"
+              - "ssmmessages:CreateDataChannel"
+              - "ssmmessages:OpenControlChannel"
+              - "ssmmessages:OpenDataChannel"
+            Resource: 
+              - "*"
+
+  PowerBiGatewayProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref PowerBiGatewayRole
+
+  PowerBiGateway:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: t3.2xlarge
+      IamInstanceProfile: !Ref PowerBiGatewayProfile
+      SubnetId: !Ref PrivateSubnet
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !Ref MainSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          <powershell>
+            cd C:\Users\Administrator\Desktop
+            # New-Item -Path "C:\Windows\ServiceProfiles\PBIEgwService\Documents\Power BI Desktop\Custom Connectors" -ItemType "directory"
+            $content = 'Add-OdbcDsn -DriverName "Simba Athena ODBC Driver" -DsnType "System" -Platform "64-bit" -Name "awsbilling" -SetPropertyValue @("Description=awsbilling" , "AWSRegion=${AWS::Region}" , "Workgroup=athena-powerbi-staizen-aws" , "S3OutputLocation=s3://aws-athena-pbi-query-results-${AWS::AccountId}-${AWS::Region}", "S3OutputEncOption=SSE_S3", "AuthenticationType=Instance Profile")' | out-file -filepath C:\Users\Administrator\Desktop\ConfigureODBC.ps1
+            # Disable IE Enhanced Security Configuration
+            $AdminKey = HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\{A509B1A7-37EF-4b3f-8CFC-4F3A74704073}
+            Set-ItemProperty -Path $AdminKey -Name IsInstalled -Value 0
+            Stop-Process -Name Explorer
+            </powershell>
+      Tags:
+        - Key: staizen-aws
+          Value: athena-powerbi
+        - Key: Name
+          Value: Power BI Data Gateway
+
+  PowerBiDesktop:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: t3.2xlarge
+      IamInstanceProfile: !Ref PowerBiGatewayProfile
+      SubnetId: !Ref PrivateSubnet
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !Ref MainSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          <powershell>
+            cd C:\Users\Administrator\Desktop
+            New-Item -Path "C:\Users\Administrator\Documents\Power BI Desktop\Custom Connectors" -ItemType "directory"
+            $content = 'Add-OdbcDsn -DriverName "Simba Athena ODBC Driver" -DsnType "System" -Platform "64-bit" -Name "awsbilling" -SetPropertyValue @("Description=awsbilling" , "AWSRegion=${AWS::Region}" , "Workgroup=athena-powerbi-staizen-aws" , "S3OutputLocation=s3://aws-athena-pbi-query-results-${AWS::AccountId}-${AWS::Region}", "S3OutputEncOption=SSE_S3", "AuthenticationType=Instance Profile")' | out-file -filepath C:\Users\Administrator\Desktop\ConfigureODBC.ps1
+            # Disable IE Enhanced Security Configuration
+            $AdminKey = HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\{A509B1A7-37EF-4b3f-8CFC-4F3A74704073}
+            Set-ItemProperty -Path $AdminKey -Name IsInstalled -Value 0
+            Stop-Process -Name Explorer
+          </powershell>
+      Tags:
+        - Key: staizen-aws
+          Value: athena-powerbi
+        - Key: Name
+          Value: Power BI Desktop
+
+  MainSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: PowerBiSG
+      GroupDescription: This security group allows outbound access to the ec2 instances
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: staizen-aws
+          Value: athena-powerbi
+
+  SGSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref MainSecurityGroup
+      IpProtocol: -1
+      SourceSecurityGroupId: !GetAtt MainSecurityGroup.GroupId
+
+  AWSBillingDB:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Description: AWS Billing Record Data database
+        Name: awsbilling
+
+  AWSBillingTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref AWSBillingDB
+      TableInput:
+        Name: records
+        StorageDescriptor:
+          Columns:
+            - Name: line_item_usage_account_id
+              Type: string
+            - Name: line_item_operation
+              Type: string
+            - Name: line_item_usage_type
+              Type: string
+            - Name: line_item_usage_start_date
+              Type: timestamp
+            - Name: line_item_usage_end_date
+              Type: timestamp
+            - Name: line_item_product_code
+              Type: string
+            - Name: line_item_usage_amount
+              Type: double
+          Location: "s3://staizen-powerbi-reports/example-report-name/example-report-name/year=2021"
+          InputFormat: 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat'
+          OutputFormat: 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat'
+          SerdeInfo:
+            SerializationLibrary: 'org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe'
+            Parameters: {"serialization.format": "1"}
+        TableType: EXTERNAL_TABLE
+        PartitionKeys:
+          - Name: month
+            Type: string
+          - Name: type
+            Type: string
+  
+  AthenaWorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: athena-powerbi-staizen-aws
+      Description: WorkGroup used on the Athena PowerBi
+      RecursiveDeleteOption: true
+      State: ENABLED
+      Tags:
+        - Key: staizen-aws
+          Value: athena-powerbi
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        ResultConfiguration:
+          EncryptionConfiguration:
+            EncryptionOption: SSE_S3
+          OutputLocation: !Sub s3://aws-athena-pbi-query-results-${AWS::AccountId}-${AWS::Region}
+    
+  CreatePartitionsFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}_athena_powerbi_partitions_creator"
+      Description: Creates Partitions on AWS Billing Record Data database
+      Runtime: python3.7
+      Timeout: 300
+      Handler: index.handler
+      MemorySize: 128
+      Role: !GetAtt [ CreatePartitionsFunctionRole, Arn ]
+      Code:
+        ZipFile: !Sub |
+          import cfnresponse
+          import boto3
+          import logging
+          import os
+          from botocore.exceptions import ClientError
+
+          logging.basicConfig(level=os.environ.get('LOGLEVEL', 'INFO'))
+
+          logger = logging.getLogger()
+          REGION = os.getenv('region')
+
+          ATHENA_CLIENT = boto3.client('athena', region_name=REGION)
+
+          def handler(event, context):
+
+            try:
+              response = ATHENA_CLIENT.start_query_execution(
+                QueryString='MSCK REPAIR TABLE records',
+                QueryExecutionContext={
+                    'Database': 'awsbilling'
+                },
+                WorkGroup='athena-powerbi-staizen-aws'
+              )
+              
+              logger.info(f"Created partitions successfully: {response}")
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, {})
+            except Exception as e:
+                logger.error('Failed to create partititions due to %s', e)
+                cfnresponse.send(event, context, cfnresponse.FAILED, {}, {})
+            return {"statusCode": 200, "response": True}
+
+          
+      Environment:
+        Variables:
+          region: !Sub ${AWS::Region}
+          workgroup: athena-powerbi-staizen-aws
+          LOG_LEVEL: INFO
+      Tags:
+        - Key: staizen-aws
+          Value: athena-powerbi
+
+  CreatePartitionsFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      ManagedPolicyArns:
+        - !Ref CreatePartitionsFunctionPolicy
+
+  CreatePartitionsFunctionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties: 
+      Description: Provides access to create partitions to be used on the Amazon Athena Power BI
+      PolicyDocument: 
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - logs:CreateLogGroup
+          - logs:CreateLogStream
+          - logs:PutLogEvents
+          Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:${AWS::StackName}_athena_powerbi_partitions_creator'
+        - Effect: "Allow"
+          Action:
+            - "s3:GetBucketLocation"
+            - "s3:GetObject"
+            - "s3:ListBucket"
+            - "s3:ListBucketMultipartUploads"
+            - "s3:ListMultipartUploadParts"
+            - "s3:AbortMultipartUpload"
+            - "s3:PutObject"
+          Resource: 
+            - "arn:aws:s3:::aws-athena-pbi-query-results-*"
+        - Effect: "Allow"
+          Action:
+            - "s3:ListBucket"
+          Resource: 
+            - "arn:aws:s3:::staizen-powerbi-reports"
+        - Effect: Allow
+          Action:
+          - "athena:GetWorkGroup"
+          - "athena:StartQueryExecution"
+          - "athena:StopQueryExecution"
+          - "athena:GetQueryExecution"
+          - "athena:GetQueryResults"
+          - "athena:GetQueryResultsStream"
+          Resource: 
+            - !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/athena-powerbi-staizen-aws"
+            - !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:datacatalog/awsbilling"
+        - Effect: "Allow"
+          Action:
+            - "glue:BatchCreatePartition"
+            - "glue:GetCatalogImportStatus"
+            - "glue:GetPartition"
+            - "glue:GetTables"
+            - "glue:GetPartitions"
+            - "glue:GetDatabases"
+            - "glue:GetDatabase"
+            - "glue:GetTable"
+          Resource: 
+            - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/awsbilling"
+            - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/awsbilling/records"
+            - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog"
+
+  PartitionsCreator:
+    Type: Custom::PartitionsCreator
+    DependsOn:
+    - AthenaEndpoint
+    - AthenaWorkGroup
+    - AWSBillingTable
+    - AWSBillingDB
+    Properties:
+      ServiceToken: !GetAtt CreatePartitionsFunction.Arn
